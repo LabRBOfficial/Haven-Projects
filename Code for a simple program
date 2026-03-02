@@ -1,0 +1,198 @@
+import customtkinter as ctk
+from tkinter import messagebox, simpledialog, filedialog, ttk
+from tksheet import Sheet
+from datetime import datetime
+from docx import Document
+from docx.shared import RGBColor
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+import hashlib
+import json
+import os
+
+# ---------------- CONFIGURAÇÃO ----------------
+VERSAO_ATUAL = "1.0.0"
+SENHA_ADMIN_HASH = hashlib.sha256("YOUR_PASSWORD_HERE".encode()).hexdigest()
+pasta_salvar = None
+
+projetos_mes = []
+rendimento_total = 0
+gastos_mes = 0
+
+# ---------------- FUNÇÕES ----------------
+def atualizar_totais():
+    saldo = rendimento_total - gastos_mes
+    lbl_totais.configure(text=f"Rendimento Total: R$ {rendimento_total:.2f} | Gastos: R$ {gastos_mes:.2f} | Saldo: R$ {saldo:.2f}")
+
+def adicionar_projeto():
+    global rendimento_total
+    num = simpledialog.askstring("Número do Projeto", "Digite o número do projeto:")
+    if not num: return
+    nome = simpledialog.askstring("Nome do Projeto", "Digite o nome do projeto:")
+    if not nome: return
+    try:
+        valor = float(simpledialog.askstring("Valor do Projeto", "Digite o valor arrecadado:"))
+    except:
+        messagebox.showwarning("Erro", "Valor inválido")
+        return
+    poupanca = round(valor*0.10,2)
+    rendimento_total += poupanca
+    projeto = {"numero": num,"nome":nome,"valor":valor,"poupanca":poupanca,"gastos":0}
+    projetos_mes.append(projeto)
+    tree.insert("", "end", values=(num,nome,f"R$ {valor:.2f}",f"R$ {poupanca:.2f}",f"R$ 0.00"))
+    sheet.set_sheet_data([[p["numero"],p["nome"],p["valor"],p["poupanca"],p["gastos"]] for p in projetos_mes])
+    atualizar_totais()
+
+def adicionar_gasto():
+    global gastos_mes
+    if not projetos_mes:
+        messagebox.showinfo("Info","Não há projetos")
+        return
+    gasto = simpledialog.askfloat("Gasto","Digite o gasto deste mês:")
+    if gasto is None: return
+    gastos_mes += gasto
+    atualizar_totais()
+
+def escolher_diretorio():
+    global pasta_salvar
+    nova_pasta = filedialog.askdirectory(title="Escolha a pasta para salvar relatórios")
+    if nova_pasta:
+        pasta_salvar = nova_pasta
+        messagebox.showinfo("Pasta selecionada", f"Arquivos serão salvos em:\n{pasta_salvar}")
+
+def gerar_relatorio():
+    global pasta_salvar
+    if not projetos_mes:
+        messagebox.showinfo("Info","Nenhum projeto adicionado")
+        return
+    
+    if not pasta_salvar:
+        escolher_diretorio()
+        if not pasta_salvar:
+            return
+
+    ano = datetime.now().year
+    mes = datetime.now().strftime('%m')
+    
+    nome_word = os.path.join(pasta_salvar, f"AGENDA_PROJETO_{ano}_{mes}.docx")
+    nome_txt = os.path.join(pasta_salvar, f"AGENDA_PROJETO_{ano}_{mes}.txt")
+    
+    doc = Document()
+    doc.add_heading(f"Rendimento Mensal - {datetime.now().strftime('%B %Y')}",level=1)
+    
+    with open(nome_txt,"w",encoding="utf-8") as f:
+        f.write(f"Rendimento Mensal - {datetime.now().strftime('%B %Y')}\n\n")
+        for p in projetos_mes:
+            f.write(f"{p['numero']}-{p['nome']} Valor: R${p['valor']:.2f} Poupança: R${p['poupanca']:.2f} Gastos: R${p['gastos']:.2f}\n")
+            par = doc.add_paragraph()
+            par.add_run(f"Número: {p['numero']}\n").bold=True
+            par.add_run(f"Nome: {p['nome']}\n")
+            par.add_run(f"Valor: R${p['valor']:.2f}\n")
+            run = par.add_run(f"Poupança: R${p['poupanca']:.2f}\n")
+            run.font.color.rgb = RGBColor(0,255,0)
+            rPr = run._element.get_or_add_rPr()
+            shd = OxmlElement('w:shd')
+            shd.set(qn('w:fill'),'004400')
+            rPr.append(shd)
+            par.add_run(f"Gastos: R${p['gastos']:.2f}\n")
+        f.write(f"\nRendimento Total: R${rendimento_total:.2f} Gastos: R${gastos_mes:.2f} Saldo: R${rendimento_total-gastos_mes:.2f}\n")
+    doc.add_paragraph(f"\nRendimento Total: R${rendimento_total:.2f} | Gastos: R${gastos_mes:.2f} | Saldo: R${rendimento_total-gastos_mes:.2f}")
+    doc.save(nome_word)
+    messagebox.showinfo("Relatório",f"Arquivos salvos:\n{nome_word}\n{nome_txt}")
+
+def resetar_mes():
+    global projetos_mes, rendimento_total, gastos_mes
+    projetos_mes.clear()
+    rendimento_total = 0
+    gastos_mes = 0
+    for i in tree.get_children():
+        tree.delete(i)
+    sheet.set_sheet_data([])
+    atualizar_totais()
+
+def toggle_fullscreen(event=None):
+    root.attributes("-fullscreen", not root.attributes("-fullscreen"))
+
+# ---------------- ADMIN ----------------
+def admin_login_e_atualizacao():
+    senha = simpledialog.askstring("Admin Login", "Digite a senha de administrador:", show="*")
+    if senha is None:
+        return
+    hash_digitado = hashlib.sha256(senha.encode()).hexdigest()
+    if hash_digitado != SENHA_ADMIN_HASH:
+        messagebox.showerror("Erro","Senha incorreta")
+        return
+
+    arquivo_exe = filedialog.askopenfilename(title="Escolha o arquivo EXE de atualização",
+                                             filetypes=[("Arquivos executáveis","*.exe")])
+    if arquivo_exe:
+        # Atualiza o banco de dados JSON
+        dados = {
+            "versao": "1.0.0",
+            "arquivo_exe": arquivo_exe
+        }
+        with open("atualizacoes.json","w") as f:
+            json.dump(dados,f, indent=4)
+        messagebox.showinfo("Atualização","Arquivo selecionado para atualização:\n" + arquivo_exe)
+
+# ---------------- CHECAR ATUALIZAÇÃO ----------------
+def checar_atualizacao():
+    if not os.path.exists("atualizacoes.json"):
+        return
+    with open("atualizacoes.json","r") as f:
+        dados = json.load(f)
+        versao_servidor = dados.get("versao")
+        if versao_servidor != VERSAO_ATUAL:
+            messagebox.showinfo("Atualização", f"Nova versão disponível: {versao_servidor}\nEXE: {dados.get('arquivo_exe')}")
+
+# ---------------- HUD INTERFACE ----------------
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("green")
+
+root = ctk.CTk()
+root.title(f"Haven Projects v{VERSAO_ATUAL}")
+root.configure(fg_color="#1d7e00")
+root.attributes('-alpha',0.94)
+root.bind("<F11>", toggle_fullscreen)
+
+# Totais
+lbl_totais = ctk.CTkLabel(root, text="", text_color="#00FF00", font=("Courier",20))
+lbl_totais.pack(pady=10)
+atualizar_totais()
+
+# Frame central
+frame_central = ctk.CTkFrame(root, fg_color="#003300", corner_radius=10)
+frame_central.pack(padx=20, pady=20, expand=True, fill="both")
+
+# Treeview
+tree_frame = ctk.CTkFrame(frame_central, fg_color="#002200", corner_radius=8)
+tree_frame.pack(side="left", padx=10, pady=10, expand=True, fill="both")
+tree = ttk.Treeview(tree_frame, columns=("numero","nome","valor","poupanca","gastos"), show="headings")
+for col, txt in zip(("numero","nome","valor","poupanca","gastos"),
+                    ("Número","Nome","Valor","Poupança","Gastos")):
+    tree.heading(col,text=txt)
+tree.pack(expand=True, fill="both", padx=5, pady=5)
+
+# Planilha
+sheet_frame = ctk.CTkFrame(frame_central, fg_color="#002200", corner_radius=8)
+sheet_frame.pack(side="right", padx=10, pady=10, expand=True, fill="both")
+sheet = Sheet(sheet_frame, height=20, width=60)
+sheet.pack(expand=True, fill="both", padx=5, pady=5)
+
+# Botões
+btn_frame = ctk.CTkFrame(root, fg_color="#002200", corner_radius=8)
+btn_frame.pack(pady=10)
+btn_style = {"width":180,"height":40, "fg_color":"black","text_color":"white","hover_color":"#111111"}
+
+ctk.CTkButton(btn_frame,text="Adicionar Projeto", command=adicionar_projeto, **btn_style).pack(side="left", padx=10)
+ctk.CTkButton(btn_frame,text="Adicionar Gasto", command=adicionar_gasto, **btn_style).pack(side="left", padx=10)
+ctk.CTkButton(btn_frame,text="Gerar Relatório", command=gerar_relatorio, **btn_style).pack(side="left", padx=10)
+ctk.CTkButton(btn_frame,text="Resetar Mês", command=resetar_mes, **btn_style).pack(side="left", padx=10)
+ctk.CTkButton(btn_frame,text="Configurações", command=escolher_diretorio, **btn_style).pack(side="left", padx=10)
+ctk.CTkButton(btn_frame,text="Admin/Atualização", command=admin_login_e_atualizacao, **btn_style).pack(side="left", padx=10)
+ctk.CTkButton(btn_frame,text="Sair", command=root.destroy, **btn_style).pack(side="left", padx=10)
+
+# Checar atualização ao abrir
+checar_atualizacao()
+
+root.mainloop()
